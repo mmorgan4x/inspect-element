@@ -1,0 +1,172 @@
+/* Picker overlay styles */
+#ext-element-picker-overlay {
+  position: absolute;
+  pointer-events: none;
+  z-index: 2147483647;
+  background: rgba(74, 144, 226, 0.3);
+  border: 2px solid #4A90E2;
+  box-sizing: border-box;
+}
+
+/* Tooltip base styles */
+.ext-picker-tooltip {
+  position: absolute;
+  z-index: 2147483647;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 0;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 11px;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  min-width: 150px;
+  max-width: 400px;
+}
+
+.ext-picker-tooltip-pinned {
+  pointer-events: auto;
+  max-height: 80vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Tooltip header */
+.ext-tooltip-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: #252526;
+  border-radius: 4px 4px 0 0;
+  border-bottom: 1px solid #3e3e42;
+  cursor: move;
+  user-select: none;
+}
+
+.ext-tooltip-selector {
+  color: #4EC9B0;
+  font-weight: bold;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ext-tooltip-size {
+  color: #888;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.ext-tooltip-btn {
+  background: #3e3e42;
+  border: none;
+  color: #d4d4d4;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 14px;
+  line-height: 1;
+  font-family: inherit;
+  transition: background 0.2s;
+}
+
+.ext-tooltip-btn:hover {
+  background: #505050;
+}
+
+.ext-tooltip-close {
+  font-size: 16px;
+  padding: 0 4px;
+}
+
+/* Add style input */
+.ext-tooltip-add-style {
+  padding: 6px 8px;
+  background: #252526;
+  border-bottom: 1px solid #3e3e42;
+}
+
+.ext-tooltip-add-input {
+  width: 100%;
+  background: #3c3c3c;
+  border: 1px solid #3e3e42;
+  color: #d4d4d4;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 11px;
+  outline: none;
+}
+
+.ext-tooltip-add-input:focus {
+  border-color: #007acc;
+  background: #1e1e1e;
+}
+
+/* Styles container */
+.ext-tooltip-styles {
+  padding: 6px 8px;
+  overflow-y: auto;
+  max-height: 60vh;
+}
+
+.ext-tooltip-styles::-webkit-scrollbar {
+  width: 8px;
+}
+
+.ext-tooltip-styles::-webkit-scrollbar-track {
+  background: #1e1e1e;
+}
+
+.ext-tooltip-styles::-webkit-scrollbar-thumb {
+  background: #424242;
+  border-radius: 4px;
+}
+
+.ext-tooltip-styles::-webkit-scrollbar-thumb:hover {
+  background: #4e4e4e;
+}
+
+/* Style rows */
+.ext-style-row {
+  padding: 2px 0;
+  line-height: 1.4;
+  word-wrap: break-word;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ext-style-prop {
+  color: #9CDCFE;
+}
+
+.ext-style-value {
+  color: #CE9178;
+  flex: 1;
+}
+
+.ext-style-remove {
+  background: transparent;
+  border: none;
+  color: #858585;
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+  transition: color 0.2s;
+  flex-shrink: 0;
+}
+
+.ext-style-remove:hover {
+  color: #f48771;
+}
+
+.ext-no-styles {
+  color: #888;
+  font-style: italic;
+  padding: 4px 0;
+}
