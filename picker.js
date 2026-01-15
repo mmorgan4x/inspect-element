@@ -4,20 +4,11 @@ let currentElement = null;
 let overlay = null;
 let tooltip = null;
 let pinnedTooltips = [];
-let tooltipStylesVisible = false;
-let tooltipSearchQuery = '';
 let draggedTooltip = null;
 let dragOffset = { x: 0, y: 0 };
 
-// Default visible styles - common ones
-const DEFAULT_VISIBLE_STYLES = [
-  'display', 'position', 'width', 'height',
-  'margin', 'padding', 'background-color', 'color',
-  'font-size', 'font-weight', 'border'
-];
-
-// Store visible styles per tooltip
-const tooltipVisibleStyles = new Map();
+// Map elements to their tooltips (WeakMap so elements can be garbage collected)
+const elementToTooltip = new WeakMap();
 
 // Create overlay elements
 function createOverlay() {
@@ -58,8 +49,81 @@ function removeOverlay() {
 
 // Clear all pinned tooltips
 function clearPinnedTooltips() {
-  pinnedTooltips.forEach(t => t.remove());
+  pinnedTooltips.forEach(t => {
+    const el = t._targetElement;
+    if (el) {
+      elementToTooltip.delete(el);
+    }
+    t.remove();
+  });
   pinnedTooltips = [];
+}
+
+// Highlight a pinned tooltip
+function highlightTooltip(tooltipEl) {
+  tooltipEl.style.outline = '2px solid #4A90E2';
+  tooltipEl.style.outlineOffset = '2px';
+}
+
+// Remove highlight from tooltip
+function unhighlightTooltip(tooltipEl) {
+  tooltipEl.style.outline = '';
+  tooltipEl.style.outlineOffset = '';
+}
+
+// Highlight the target element of a tooltip
+function highlightTargetElement(element) {
+  element._originalOutline = element.style.outline;
+  element.style.outline = '2px solid #4A90E2';
+}
+
+// Remove highlight from target element
+function unhighlightTargetElement(element) {
+  element.style.outline = element._originalOutline || '';
+}
+
+// Find tooltip for element
+function getTooltipForElement(element) {
+  return elementToTooltip.get(element);
+}
+
+// Check if position overlaps with existing tooltips
+function findNonOverlappingPosition(x, y, width, height) {
+  const scrollX = window.scrollX || window.pageXOffset;
+  const scrollY = window.scrollY || window.pageYOffset;
+
+  let newX = x;
+  let newY = y;
+  let attempts = 0;
+  const maxAttempts = 10;
+
+  while (attempts < maxAttempts) {
+    let hasOverlap = false;
+
+    for (const existingTooltip of pinnedTooltips) {
+      const rect = existingTooltip.getBoundingClientRect();
+      const existingX = rect.left + scrollX;
+      const existingY = rect.top + scrollY;
+      const existingWidth = rect.width;
+      const existingHeight = rect.height;
+
+      // Check for overlap
+      if (newX < existingX + existingWidth &&
+          newX + width > existingX &&
+          newY < existingY + existingHeight &&
+          newY + height > existingY) {
+        hasOverlap = true;
+        // Move below the overlapping tooltip
+        newY = existingY + existingHeight + 10;
+        break;
+      }
+    }
+
+    if (!hasOverlap) break;
+    attempts++;
+  }
+
+  return { x: newX, y: newY };
 }
 
 // Get element selector string
@@ -80,110 +144,131 @@ function getElementSelector(element) {
   return selector;
 }
 
-// Get all non-default computed styles
-function getNonDefaultStyles(element) {
-  const computed = window.getComputedStyle(element);
-  const nonDefaultStyles = {};
-  
-  // Create a temporary element of the same type to compare against defaults
-  const tempElement = document.createElement(element.tagName);
-  tempElement.style.cssText = 'all: initial;';
-  
-  // Temporarily add to DOM to get computed styles
-  tempElement.style.position = 'absolute';
-  tempElement.style.visibility = 'hidden';
-  tempElement.style.pointerEvents = 'none';
-  document.body.appendChild(tempElement);
-  const defaultComputed = window.getComputedStyle(tempElement);
-  
-  // Compare all CSS properties
-  for (let i = 0; i < computed.length; i++) {
-    const prop = computed[i];
-    const value = computed.getPropertyValue(prop);
-    const defaultValue = defaultComputed.getPropertyValue(prop);
-    
-    // Only include if value differs from default
-    if (value !== defaultValue) {
-      nonDefaultStyles[prop] = value;
+// Get declared values from stylesheets and inline styles
+function getDeclaredStyles(element) {
+  const declared = {};
+
+  // Get styles from matching CSS rules
+  try {
+    for (const sheet of document.styleSheets) {
+      try {
+        const rules = sheet.cssRules || sheet.rules;
+        if (!rules) continue;
+
+        for (const rule of rules) {
+          if (rule.type === CSSRule.STYLE_RULE) {
+            try {
+              if (element.matches(rule.selectorText)) {
+                const style = rule.style;
+                for (let i = 0; i < style.length; i++) {
+                  const prop = style[i];
+                  const value = style.getPropertyValue(prop);
+                  const priority = style.getPropertyPriority(prop);
+                  declared[prop] = priority ? `${value} !important` : value;
+                }
+              }
+            } catch (e) {
+              // Skip invalid selectors
+            }
+          }
+        }
+      } catch (e) {
+        // Skip cross-origin stylesheets
+      }
     }
+  } catch (e) {
+    // Ignore stylesheet access errors
   }
-  
-  // Also check inline styles explicitly
+
+  // Inline styles override stylesheet styles
   if (element.style.cssText) {
     for (let i = 0; i < element.style.length; i++) {
       const prop = element.style[i];
       const value = element.style.getPropertyValue(prop);
       const priority = element.style.getPropertyPriority(prop);
-      
-      nonDefaultStyles[prop] = priority ? `${value} !important` : value;
+      declared[prop] = priority ? `${value} !important` : value;
     }
   }
-  
-  document.body.removeChild(tempElement);
-  return nonDefaultStyles;
+
+  return declared;
 }
 
 // Pin tooltip at current position
 function pinTooltip(element) {
   if (!tooltip) return;
-  
+
+  // Check if element already has a tooltip
+  const existingTooltip = getTooltipForElement(element);
+  if (existingTooltip) {
+    // Highlight existing tooltip instead of creating new one
+    highlightTooltip(existingTooltip);
+    setTimeout(() => unhighlightTooltip(existingTooltip), 500);
+    return;
+  }
+
   const rect = element.getBoundingClientRect();
   const scrollX = window.scrollX || window.pageXOffset;
   const scrollY = window.scrollY || window.pageYOffset;
   const selector = getElementSelector(element);
-  const size = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
-  
+
   // Clone the tooltip for pinning
   const pinnedTooltip = document.createElement('div');
   pinnedTooltip.className = 'ext-picker-tooltip ext-picker-tooltip-pinned';
-  
+
   let tooltipX = rect.left + scrollX;
-  let tooltipY = rect.top + scrollY - 30;
-  
-  if (tooltipY < scrollY) {
-    tooltipY = rect.bottom + scrollY + 5;
+  let tooltipY = rect.bottom + scrollY + 5;
+
+  // If tooltip would go off bottom of viewport, position above element
+  if (rect.bottom + 200 > window.innerHeight) {
+    tooltipY = rect.top + scrollY - 200;
+    if (tooltipY < scrollY) {
+      tooltipY = scrollY + 5;
+    }
   }
-  
+
+  // Estimate tooltip size and find non-overlapping position
+  const estimatedWidth = 300;
+  const estimatedHeight = 250;
+  const adjustedPos = findNonOverlappingPosition(tooltipX, tooltipY, estimatedWidth, estimatedHeight);
+  tooltipX = adjustedPos.x;
+  tooltipY = adjustedPos.y;
+
   pinnedTooltip.style.left = tooltipX + 'px';
   pinnedTooltip.style.top = tooltipY + 'px';
-  
-  // Initialize visible styles for this tooltip with defaults
-  const tooltipId = Date.now();
-  pinnedTooltip.dataset.tooltipId = tooltipId;
-  tooltipVisibleStyles.set(tooltipId, new Set(DEFAULT_VISIBLE_STYLES));
-  
+
+  // Store reference to target element
+  pinnedTooltip._targetElement = element;
+
+  // Register element -> tooltip mapping
+  elementToTooltip.set(element, pinnedTooltip);
+
   // Build tooltip content
-  const allStyles = getNonDefaultStyles(element);
-  const visibleStyles = getVisibleStylesForTooltip(tooltipId, allStyles);
-  
-  pinnedTooltip.innerHTML = buildTooltipContent(selector, size, allStyles, visibleStyles, true, element, tooltipId);
-  
+  const declaredStyles = getDeclaredStyles(element);
+  const keyStyles = getKeyComputedStyles(element);
+  const textContent = getTextContent(element);
+
+  pinnedTooltip.innerHTML = buildTooltipContent(selector, declaredStyles, keyStyles, textContent, true);
+
   document.documentElement.appendChild(pinnedTooltip);
   pinnedTooltips.push(pinnedTooltip);
-  
+
+  // Add hover events to highlight target element
+  pinnedTooltip.addEventListener('mouseenter', () => {
+    highlightTargetElement(element);
+  });
+  pinnedTooltip.addEventListener('mouseleave', () => {
+    unhighlightTargetElement(element);
+  });
+
   // Add event listeners for pinned tooltip
-  setupPinnedTooltipEvents(pinnedTooltip, element, tooltipId);
-  
+  setupPinnedTooltipEvents(pinnedTooltip, element);
+
   // Make header draggable
   const header = pinnedTooltip.querySelector('.ext-tooltip-header');
   if (header) {
     header.style.cursor = 'move';
     header.addEventListener('mousedown', (e) => startDrag(e, pinnedTooltip));
   }
-}
-
-// Get visible styles for a specific tooltip
-function getVisibleStylesForTooltip(tooltipId, allStyles) {
-  const visibleStyleNames = tooltipVisibleStyles.get(tooltipId) || new Set(DEFAULT_VISIBLE_STYLES);
-  const visible = {};
-  
-  for (const styleName of visibleStyleNames) {
-    if (allStyles[styleName] !== undefined) {
-      visible[styleName] = allStyles[styleName];
-    }
-  }
-  
-  return visible;
 }
 
 // Drag functionality
@@ -232,57 +317,125 @@ function stopDrag(e) {
   document.removeEventListener('mousemove', onDrag);
   document.removeEventListener('mouseup', stopDrag);
 }
-function buildTooltipContent(selector, size, allStyles, visibleStyles, isPinned, element, tooltipId) {
-  const styleCount = Object.keys(visibleStyles).length;
-  
-  let html = `
-    <div class="ext-tooltip-header">
-      <span class="ext-tooltip-selector">${escapeHtml(selector)}</span>
-      <span class="ext-tooltip-size">${size}</span>
-  `;
-  
+// Get text content of element (truncated)
+function getTextContent(element) {
+  const text = element.textContent?.trim() || '';
+  if (!text) return '';
+  // Only return if it's direct text, not from children with lots of content
+  const directText = Array.from(element.childNodes)
+    .filter(node => node.nodeType === Node.TEXT_NODE)
+    .map(node => node.textContent.trim())
+    .join(' ')
+    .trim();
+  if (!directText) return '';
+  return directText.length > 30 ? directText.substring(0, 30) + '…' : directText;
+}
+
+// Format number with decimals only if needed
+function formatNum(n) {
+  if (Number.isInteger(n)) return n.toString();
+  return n.toFixed(1).replace(/\.0$/, '');
+}
+
+// Convert RGB/RGBA color to hex
+function rgbToHex(color) {
+  if (!color) return null;
+
+  // Already hex
+  if (color.startsWith('#')) return color;
+
+  // Parse rgb/rgba
+  const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+  if (!match) return color;
+
+  const r = parseInt(match[1]);
+  const g = parseInt(match[2]);
+  const b = parseInt(match[3]);
+  const a = match[4] !== undefined ? parseFloat(match[4]) : 1;
+
+  const hex = '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
+
+  if (a < 1) {
+    return `${hex} (${Math.round(a * 100)}%)`;
+  }
+  return hex;
+}
+
+// Get key computed properties that should always show
+function getKeyComputedStyles(element) {
+  const computed = window.getComputedStyle(element);
+  const styles = {};
+  const rect = element.getBoundingClientRect();
+
+  // Width x Height (with decimals if needed)
+  styles['size'] = `${formatNum(rect.width)} × ${formatNum(rect.height)}`;
+
+  // Padding (if not zero)
+  const padding = computed.padding;
+  if (padding && padding !== '0px') {
+    styles['padding'] = padding;
+  }
+
+  // Margin (if not zero)
+  const margin = computed.margin;
+  if (margin && margin !== '0px') {
+    styles['margin'] = margin;
+  }
+
+  // Border (if not zero/none)
+  const border = computed.border;
+  const borderWidth = computed.borderWidth;
+  if (borderWidth && borderWidth !== '0px') {
+    styles['border'] = border || `${borderWidth} ${computed.borderStyle} ${computed.borderColor}`;
+  }
+
+  // Color (as hex)
+  const color = computed.color;
+  if (color) {
+    styles['color'] = { value: rgbToHex(color), raw: color };
+  }
+
+  // Background (as hex if color)
+  const bgColor = computed.backgroundColor;
+  const bgImage = computed.backgroundImage;
+  if (bgColor && bgColor !== 'rgba(0, 0, 0, 0)' && bgColor !== 'transparent') {
+    styles['background'] = { value: rgbToHex(bgColor), raw: bgColor };
+  } else if (bgImage && bgImage !== 'none') {
+    styles['background'] = bgImage;
+  }
+
+  return styles;
+}
+
+function buildTooltipContent(selector, declaredStyles, keyStyles, textContent, isPinned) {
+  const declaredCount = Object.keys(declaredStyles).length;
+
+  let html = `<div class="ext-tooltip-header"><span class="ext-tooltip-selector">${escapeHtml(selector)}</span>`;
+
   if (isPinned) {
-    html += `
-      <button class="ext-tooltip-btn ext-tooltip-toggle-styles" title="Toggle styles">
-        ${tooltipStylesVisible ? '−' : '+'}
-      </button>
-      <button class="ext-tooltip-btn ext-tooltip-close" title="Close">×</button>
-    `;
+    html += `<button class="ext-tooltip-btn ext-tooltip-close" title="Close">×</button>`;
+  } else {
+    html += `<span class="ext-tooltip-close-placeholder"></span>`;
   }
-  
+
+  html += `</div><div class="ext-tooltip-styles">`;
+
+  // Show text content as first item in computed group
+  if (textContent) {
+    html += `<div class="ext-style-row ext-key-style"><span class="ext-style-prop">text</span>:<span class="ext-style-value">"${escapeHtml(textContent)}";</span></div>`;
+  }
+
+  // Always show key computed properties
+  html += formatKeyStyles(keyStyles);
+
+  // Then show declared styles
+  if (declaredCount > 0) {
+    html += `<div class="ext-style-separator"></div>`;
+    html += formatSetStyles(declaredStyles);
+  }
+
   html += `</div>`;
-  
-  if (isPinned && tooltipStylesVisible) {
-    // Add style search/typeahead
-    html += `
-      <div class="ext-tooltip-add-style">
-        <input type="text" class="ext-tooltip-add-input" placeholder="Add style property..." list="style-suggestions-${tooltipId}">
-        <datalist id="style-suggestions-${tooltipId}">
-    `;
-    
-    // Add all available styles as suggestions (excluding already visible ones)
-    const visibleStyleNames = tooltipVisibleStyles.get(tooltipId) || new Set();
-    for (const prop of Object.keys(allStyles).sort()) {
-      if (!visibleStyleNames.has(prop)) {
-        html += `<option value="${escapeHtml(prop)}">`;
-      }
-    }
-    
-    html += `
-        </datalist>
-      </div>
-      <div class="ext-tooltip-styles">
-    `;
-    
-    if (styleCount > 0) {
-      html += formatStylesForTooltip(visibleStyles, tooltipId);
-    } else {
-      html += '<div class="ext-no-styles">No styles selected</div>';
-    }
-    
-    html += `</div>`;
-  }
-  
+
   return html;
 }
 
@@ -293,95 +446,58 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// Format styles for tooltip display
-function formatStylesForTooltip(styles, tooltipId) {
+// Format key computed styles
+function formatKeyStyles(styles) {
   let html = '';
   for (const [prop, value] of Object.entries(styles)) {
-    html += `<div class="ext-style-row">
-      <span class="ext-style-prop">${escapeHtml(prop)}</span>: 
-      <span class="ext-style-value">${escapeHtml(value)}</span>;
-      <button class="ext-style-remove" data-prop="${escapeHtml(prop)}" title="Remove">×</button>
-    </div>`;
+    // Check if value is a color object with raw color for square
+    if (value && typeof value === 'object' && value.raw) {
+      html += `<div class="ext-style-row ext-key-style"><span class="ext-style-prop">${escapeHtml(prop)}</span>:<span class="ext-color-square" style="background:${value.raw}"></span><span class="ext-style-value">${escapeHtml(value.value)};</span></div>`;
+    } else {
+      html += `<div class="ext-style-row ext-key-style"><span class="ext-style-prop">${escapeHtml(prop)}</span>:<span class="ext-style-value">${escapeHtml(value)};</span></div>`;
+    }
+  }
+  return html;
+}
+
+// Format set/declared styles
+function formatSetStyles(styles) {
+  let html = '';
+  for (const [prop, value] of Object.entries(styles)) {
+    html += `<div class="ext-style-row"><span class="ext-style-prop">${escapeHtml(prop)}</span>:<span class="ext-style-value">${escapeHtml(value)};</span></div>`;
   }
   return html;
 }
 
 // Setup event listeners for pinned tooltip
-function setupPinnedTooltipEvents(pinnedTooltip, element, tooltipId) {
+function setupPinnedTooltipEvents(pinnedTooltip, element) {
   // Close button
   const closeBtn = pinnedTooltip.querySelector('.ext-tooltip-close');
   if (closeBtn) {
     closeBtn.addEventListener('click', (e) => {
       e.stopPropagation();
+      // Clean up element mapping
+      const targetEl = pinnedTooltip._targetElement;
+      if (targetEl) {
+        elementToTooltip.delete(targetEl);
+        unhighlightTargetElement(targetEl);
+      }
       pinnedTooltip.remove();
       pinnedTooltips = pinnedTooltips.filter(t => t !== pinnedTooltip);
-      tooltipVisibleStyles.delete(tooltipId);
     });
   }
-  
-  // Toggle styles button
-  const toggleBtn = pinnedTooltip.querySelector('.ext-tooltip-toggle-styles');
-  if (toggleBtn) {
-    toggleBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      tooltipStylesVisible = !tooltipStylesVisible;
-      
-      rebuildTooltipContent(pinnedTooltip, element, tooltipId);
-    });
-  }
-  
-  // Add style input
-  const addInput = pinnedTooltip.querySelector('.ext-tooltip-add-input');
-  if (addInput) {
-    addInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        const styleName = addInput.value.trim();
-        if (styleName) {
-          const visibleStyles = tooltipVisibleStyles.get(tooltipId);
-          if (visibleStyles) {
-            visibleStyles.add(styleName);
-            addInput.value = '';
-            rebuildTooltipContent(pinnedTooltip, element, tooltipId);
-          }
-        }
-      }
-    });
-    
-    addInput.addEventListener('click', (e) => {
-      e.stopPropagation();
-    });
-  }
-  
-  // Remove style buttons
-  const removeButtons = pinnedTooltip.querySelectorAll('.ext-style-remove');
-  removeButtons.forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      
-      const prop = btn.dataset.prop;
-      const visibleStyles = tooltipVisibleStyles.get(tooltipId);
-      if (visibleStyles && prop) {
-        visibleStyles.delete(prop);
-        rebuildTooltipContent(pinnedTooltip, element, tooltipId);
-      }
-    });
-  });
 }
 
 // Rebuild tooltip content after changes
-function rebuildTooltipContent(pinnedTooltip, element, tooltipId) {
+function rebuildTooltipContent(pinnedTooltip, element) {
   const selector = getElementSelector(element);
-  const rect = element.getBoundingClientRect();
-  const size = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
-  const allStyles = getNonDefaultStyles(element);
-  const visibleStyles = getVisibleStylesForTooltip(tooltipId, allStyles);
-  
-  pinnedTooltip.innerHTML = buildTooltipContent(selector, size, allStyles, visibleStyles, true, element, tooltipId);
-  setupPinnedTooltipEvents(pinnedTooltip, element, tooltipId);
-  
+  const declaredStyles = getDeclaredStyles(element);
+  const keyStyles = getKeyComputedStyles(element);
+  const textContent = getTextContent(element);
+
+  pinnedTooltip.innerHTML = buildTooltipContent(selector, declaredStyles, keyStyles, textContent, true);
+  setupPinnedTooltipEvents(pinnedTooltip, element);
+
   // Restore draggable header
   const header = pinnedTooltip.querySelector('.ext-tooltip-header');
   if (header) {
@@ -393,33 +509,35 @@ function rebuildTooltipContent(pinnedTooltip, element, tooltipId) {
 // Update overlay position and tooltip
 function updateOverlay(element) {
   if (!overlay || !tooltip) return;
-  
+
   const rect = element.getBoundingClientRect();
   const scrollX = window.scrollX || window.pageXOffset;
   const scrollY = window.scrollY || window.pageYOffset;
-  
+
   // Update overlay
   overlay.style.left = (rect.left + scrollX) + 'px';
   overlay.style.top = (rect.top + scrollY) + 'px';
   overlay.style.width = rect.width + 'px';
   overlay.style.height = rect.height + 'px';
   overlay.style.display = 'block';
-  
+
   // Update tooltip
   const selector = getElementSelector(element);
-  const size = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
-  
+  const declaredStyles = getDeclaredStyles(element);
+  const keyStyles = getKeyComputedStyles(element);
+  const textContent = getTextContent(element);
+
   let tooltipX = rect.left + scrollX;
-  let tooltipY = rect.top + scrollY - 30;
-  
+  let tooltipY = rect.bottom + scrollY + 5;
+
   // Keep tooltip in viewport
-  if (tooltipY < scrollY) {
-    tooltipY = rect.bottom + scrollY + 5;
+  if (rect.bottom + 200 > window.innerHeight) {
+    tooltipY = rect.top + scrollY - 200;
   }
-  
+
   tooltip.style.left = tooltipX + 'px';
   tooltip.style.top = tooltipY + 'px';
-  tooltip.innerHTML = buildTooltipContent(selector, size, {}, {}, false, element, null);
+  tooltip.innerHTML = buildTooltipContent(selector, declaredStyles, keyStyles, textContent, false);
   tooltip.style.display = 'block';
 }
 
@@ -454,16 +572,19 @@ function stopPicker() {
   document.removeEventListener('contextmenu', handleContextMenu, true);
 }
 
+// Track currently highlighted tooltip (for cleanup)
+let currentHighlightedTooltip = null;
+
 // Handle mouse move
 function handleMouseMove(e) {
   if (!pickerActive) return;
-  
+
   currentElement = e.target;
-  
+
   // Don't highlight our own overlay/tooltip or any pinned tooltips
-  if (currentElement === overlay || 
+  if (currentElement === overlay ||
       currentElement === tooltip ||
-      overlay?.contains(currentElement) || 
+      overlay?.contains(currentElement) ||
       tooltip?.contains(currentElement) ||
       currentElement.classList?.contains('ext-picker-tooltip') ||
       currentElement.classList?.contains('ext-tooltip-header') ||
@@ -473,9 +594,38 @@ function handleMouseMove(e) {
     // Hide overlay and tooltip when over our own elements
     if (overlay) overlay.style.display = 'none';
     if (tooltip) tooltip.style.display = 'none';
+    // Clear any highlighted tooltip
+    if (currentHighlightedTooltip) {
+      unhighlightTooltip(currentHighlightedTooltip);
+      currentHighlightedTooltip = null;
+    }
     return;
   }
-  
+
+  // Check if element already has a tooltip
+  const existingTooltip = getTooltipForElement(currentElement);
+  if (existingTooltip) {
+    // Hide picker overlay/tooltip and highlight existing tooltip instead
+    if (overlay) overlay.style.display = 'none';
+    if (tooltip) tooltip.style.display = 'none';
+
+    // Unhighlight previous tooltip if different
+    if (currentHighlightedTooltip && currentHighlightedTooltip !== existingTooltip) {
+      unhighlightTooltip(currentHighlightedTooltip);
+    }
+
+    highlightTooltip(existingTooltip);
+    currentHighlightedTooltip = existingTooltip;
+    e.stopPropagation();
+    return;
+  }
+
+  // Clear any previously highlighted tooltip
+  if (currentHighlightedTooltip) {
+    unhighlightTooltip(currentHighlightedTooltip);
+    currentHighlightedTooltip = null;
+  }
+
   updateOverlay(currentElement);
   e.stopPropagation();
 }

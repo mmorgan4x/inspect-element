@@ -54,11 +54,6 @@
   white-space: nowrap;
 }
 
-.ext-tooltip-size {
-  color: #888;
-  font-size: 10px;
-  white-space: nowrap;
-}
 
 .ext-tooltip-btn {
   background: #3e3e42;
@@ -80,30 +75,12 @@
 .ext-tooltip-close {
   font-size: 16px;
   padding: 0 4px;
+  margin-left: 8px;
 }
 
-/* Add style input */
-.ext-tooltip-add-style {
-  padding: 6px 8px;
-  background: #252526;
-  border-bottom: 1px solid #3e3e42;
-}
-
-.ext-tooltip-add-input {
-  width: 100%;
-  background: #3c3c3c;
-  border: 1px solid #3e3e42;
-  color: #d4d4d4;
-  padding: 4px 6px;
-  border-radius: 3px;
-  font-family: inherit;
-  font-size: 11px;
-  outline: none;
-}
-
-.ext-tooltip-add-input:focus {
-  border-color: #007acc;
-  background: #1e1e1e;
+.ext-tooltip-close-placeholder {
+  width: 20px;
+  display: inline-block;
 }
 
 /* Styles container */
@@ -137,7 +114,6 @@
   word-wrap: break-word;
   display: flex;
   align-items: center;
-  gap: 4px;
 }
 
 .ext-style-prop {
@@ -147,26 +123,36 @@
 .ext-style-value {
   color: #CE9178;
   flex: 1;
-}
-
-.ext-style-remove {
-  background: transparent;
-  border: none;
-  color: #858585;
-  cursor: pointer;
-  padding: 0 4px;
-  font-size: 14px;
-  line-height: 1;
-  transition: color 0.2s;
-  flex-shrink: 0;
-}
-
-.ext-style-remove:hover {
-  color: #f48771;
+  margin-left: 4px;
 }
 
 .ext-no-styles {
   color: #888;
   font-style: italic;
   padding: 4px 0;
+}
+
+
+/* Separator between key styles and declared styles */
+.ext-style-separator {
+  height: 1px;
+  background: #3e3e42;
+  margin: 6px 0;
+}
+
+/* Key computed styles */
+.ext-key-style .ext-style-prop {
+  color: #808080;
+}
+
+/* Color square preview */
+.ext-color-square {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1px solid #666;
+  border-radius: 2px;
+  vertical-align: middle;
+  margin-right: 4px;
+  flex-shrink: 0;
 }
