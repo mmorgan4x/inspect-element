@@ -57,31 +57,168 @@ function clearPinnedTooltips() {
     t.remove();
   });
   pinnedTooltips = [];
+  unhighlightPair(null, null);
+  if (pinnedTooltips.length === 0) {
+    stopRenderLoop();
+    removeHighlightLayer();
+  }
 }
 
 // Highlight color
 const HIGHLIGHT_COLOR = '#4ade80';
+const PICKER_COLOR = '#4A90E2';
+
+// Highlight overlay layer
+let highlightLayer = null;
+let elementHighlight = null;
+let tooltipHighlight = null;
+let renderLoopId = null;
+
+// Current highlighted pair
+let highlightedElement = null;
+let highlightedTooltip = null;
+
+// Create highlight layer
+function createHighlightLayer() {
+  if (highlightLayer) return;
+
+  highlightLayer = document.createElement('div');
+  highlightLayer.id = 'ext-highlight-layer';
+  highlightLayer.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 2147483647;
+    overflow: hidden;
+  `;
+
+  elementHighlight = document.createElement('div');
+  elementHighlight.className = 'ext-highlight-rect';
+  elementHighlight.style.cssText = `
+    position: fixed;
+    border: 2px solid ${HIGHLIGHT_COLOR};
+    pointer-events: none;
+    display: none;
+    box-sizing: border-box;
+  `;
+
+  tooltipHighlight = document.createElement('div');
+  tooltipHighlight.className = 'ext-highlight-rect';
+  tooltipHighlight.style.cssText = `
+    position: fixed;
+    border: 2px solid ${HIGHLIGHT_COLOR};
+    pointer-events: none;
+    display: none;
+    box-sizing: border-box;
+  `;
+
+  highlightLayer.appendChild(elementHighlight);
+  highlightLayer.appendChild(tooltipHighlight);
+  document.documentElement.appendChild(highlightLayer);
+}
+
+// Remove highlight layer
+function removeHighlightLayer() {
+  if (highlightLayer) {
+    highlightLayer.remove();
+    highlightLayer = null;
+    elementHighlight = null;
+    tooltipHighlight = null;
+  }
+  stopRenderLoop();
+}
+
+// Update highlight rectangle position
+function updateHighlightRect(rect, element) {
+  if (!rect || !element) return;
+  const bounds = element.getBoundingClientRect();
+  rect.style.left = bounds.left + 'px';
+  rect.style.top = bounds.top + 'px';
+  rect.style.width = bounds.width + 'px';
+  rect.style.height = bounds.height + 'px';
+  rect.style.display = 'block';
+}
+
+// Hide highlight rectangle
+function hideHighlightRect(rect) {
+  if (rect) rect.style.display = 'none';
+}
 
 // Highlight both tooltip and element together
 function highlightPair(tooltipEl, element) {
-  if (tooltipEl) {
-    tooltipEl.style.outline = `2px solid ${HIGHLIGHT_COLOR}`;
-    tooltipEl.style.outlineOffset = '2px';
-  }
-  if (element) {
-    element._originalOutline = element.style.outline;
-    element.style.outline = `2px solid ${HIGHLIGHT_COLOR}`;
-  }
+  createHighlightLayer();
+  highlightedElement = element;
+  highlightedTooltip = tooltipEl;
+  startRenderLoop();
 }
 
 // Remove highlight from both
 function unhighlightPair(tooltipEl, element) {
-  if (tooltipEl) {
-    tooltipEl.style.outline = '';
-    tooltipEl.style.outlineOffset = '';
+  highlightedElement = null;
+  highlightedTooltip = null;
+  hideHighlightRect(elementHighlight);
+  hideHighlightRect(tooltipHighlight);
+}
+
+// Render loop - constantly update highlights and tooltip data
+function renderLoop() {
+  // Update highlight positions
+  if (highlightedElement && elementHighlight) {
+    updateHighlightRect(elementHighlight, highlightedElement);
+  } else {
+    hideHighlightRect(elementHighlight);
   }
-  if (element) {
-    element.style.outline = element._originalOutline || '';
+
+  if (highlightedTooltip && tooltipHighlight) {
+    updateHighlightRect(tooltipHighlight, highlightedTooltip);
+  } else {
+    hideHighlightRect(tooltipHighlight);
+  }
+
+  // Update all pinned tooltips with fresh data
+  for (const pinnedTooltip of pinnedTooltips) {
+    const element = pinnedTooltip._targetElement;
+    if (element && document.body.contains(element)) {
+      const selector = getElementSelector(element);
+      const declaredStyles = getDeclaredStyles(element);
+      const keyStyles = getKeyComputedStyles(element);
+      const textContent = getTextContent(element);
+      const newContent = buildTooltipContent(selector, declaredStyles, keyStyles, textContent, true);
+
+      // Only update if content changed to avoid flicker
+      if (pinnedTooltip._lastContent !== newContent) {
+        pinnedTooltip.innerHTML = newContent;
+        pinnedTooltip._lastContent = newContent;
+        setupPinnedTooltipEvents(pinnedTooltip, element);
+
+        // Restore draggable header
+        const header = pinnedTooltip.querySelector('.ext-tooltip-header');
+        if (header) {
+          header.style.cursor = 'move';
+          header.addEventListener('mousedown', (e) => startDrag(e, pinnedTooltip));
+        }
+      }
+    }
+  }
+
+  renderLoopId = requestAnimationFrame(renderLoop);
+}
+
+// Start render loop
+function startRenderLoop() {
+  if (!renderLoopId) {
+    renderLoopId = requestAnimationFrame(renderLoop);
+  }
+}
+
+// Stop render loop
+function stopRenderLoop() {
+  if (renderLoopId) {
+    cancelAnimationFrame(renderLoopId);
+    renderLoopId = null;
   }
 }
 
@@ -272,12 +409,16 @@ function pinTooltip(element) {
   document.documentElement.appendChild(pinnedTooltip);
   pinnedTooltips.push(pinnedTooltip);
 
+  // Start render loop to keep data updated
+  createHighlightLayer();
+  startRenderLoop();
+
   // Add hover events to highlight both tooltip and element
   pinnedTooltip.addEventListener('mouseenter', () => {
-    highlightPair(pinnedTooltip, element);
+    if (!draggedTooltip) highlightPair(pinnedTooltip, element);
   });
   pinnedTooltip.addEventListener('mouseleave', () => {
-    unhighlightPair(pinnedTooltip, element);
+    if (!draggedTooltip) unhighlightPair(pinnedTooltip, element);
   });
 
   // Add event listeners for pinned tooltip
@@ -297,19 +438,22 @@ function startDrag(e, tooltipElement) {
   if (e.target.classList.contains('ext-tooltip-btn')) {
     return;
   }
-  
+
   e.preventDefault();
   e.stopPropagation();
-  
+
   draggedTooltip = tooltipElement;
-  
+
+  // Clear any highlights while dragging
+  unhighlightPair(highlightedTooltip, highlightedElement);
+
   const rect = tooltipElement.getBoundingClientRect();
   dragOffset.x = e.clientX - rect.left;
   dragOffset.y = e.clientY - rect.top;
-  
-  document.addEventListener('mousemove', onDrag);
-  document.addEventListener('mouseup', stopDrag);
-  
+
+  document.addEventListener('mousemove', onDrag, true);
+  document.addEventListener('mouseup', stopDrag, true);
+
   tooltipElement.style.opacity = '0.8';
 }
 
@@ -333,9 +477,9 @@ function stopDrag(e) {
     draggedTooltip.style.opacity = '1';
     draggedTooltip = null;
   }
-  
-  document.removeEventListener('mousemove', onDrag);
-  document.removeEventListener('mouseup', stopDrag);
+
+  document.removeEventListener('mousemove', onDrag, true);
+  document.removeEventListener('mouseup', stopDrag, true);
 }
 // Get text content of element (truncated)
 function getTextContent(element) {
@@ -514,10 +658,18 @@ function setupPinnedTooltipEvents(pinnedTooltip, element) {
       const targetEl = pinnedTooltip._targetElement;
       if (targetEl) {
         elementToTooltip.delete(targetEl);
-        unhighlightTargetElement(targetEl);
+      }
+      // Clear highlights if this was highlighted
+      if (highlightedTooltip === pinnedTooltip || highlightedElement === targetEl) {
+        unhighlightPair(highlightedTooltip, highlightedElement);
       }
       pinnedTooltip.remove();
       pinnedTooltips = pinnedTooltips.filter(t => t !== pinnedTooltip);
+      // Stop render loop if no more tooltips
+      if (pinnedTooltips.length === 0) {
+        stopRenderLoop();
+        removeHighlightLayer();
+      }
     });
   }
 }
@@ -593,12 +745,17 @@ function startPicker() {
 // Stop picker mode
 function stopPicker() {
   if (!pickerActive) return;
-  
+
   pickerActive = false;
   removeOverlay();
   document.body.style.cursor = '';
   currentElement = null;
-  
+
+  // Clear any highlights from hovering
+  unhighlightPair(currentHighlightedTooltip, currentHighlightedElement);
+  currentHighlightedTooltip = null;
+  currentHighlightedElement = null;
+
   // Remove event listeners
   document.removeEventListener('mousemove', handleMouseMove, true);
   document.removeEventListener('click', handleClick, true);
@@ -613,6 +770,9 @@ let currentHighlightedElement = null;
 // Handle mouse move
 function handleMouseMove(e) {
   if (!pickerActive) return;
+
+  // Don't process while dragging a tooltip
+  if (draggedTooltip) return;
 
   currentElement = e.target;
 
@@ -686,22 +846,14 @@ function handleClick(e) {
   if (element) {
     // Pin the tooltip at current position
     pinTooltip(element);
-    
-    // Store element globally for inspect() access
-    window.__SELECTED_ELEMENT__ = element;
-    
+
     // Flash the selected element
     const originalOutline = element.style.outline;
     element.style.outline = '2px solid #FF6B6B';
-    
+
     setTimeout(() => {
       element.style.outline = originalOutline;
     }, 500);
-    
-    // Send message to devtools page to call inspect()
-    chrome.runtime.sendMessage({
-      action: 'inspectElement'
-    });
   }
   
   // Don't stop picker - let it continue
@@ -719,24 +871,14 @@ function handleKeyDown(e) {
   }
 }
 
-// Handle context menu - clear pinned tooltips and inspect
+// Handle context menu - clear pinned tooltips
 function handleContextMenu(e) {
   if (pickerActive) {
     e.preventDefault();
     e.stopPropagation();
-    
+
     // Clear all pinned tooltips
     clearPinnedTooltips();
-    
-    // Inspect the current element
-    if (currentElement) {
-      window.__SELECTED_ELEMENT__ = currentElement;
-      
-      // Send message to devtools page to call inspect()
-      chrome.runtime.sendMessage({
-        action: 'inspectElement'
-      });
-    }
   }
 }
 

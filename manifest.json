@@ -19,7 +19,6 @@
       "run_at": "document_start"
     }
   ],
-  "devtools_page": "devtools.html",
   "icons": {
     "16": "icon16.png",
     "48": "icon48.png",
