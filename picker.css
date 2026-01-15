@@ -78,9 +78,8 @@
   margin-left: 8px;
 }
 
-.ext-tooltip-close-placeholder {
-  width: 20px;
-  display: inline-block;
+.ext-tooltip-close-hidden {
+  visibility: hidden;
 }
 
 /* Styles container */
@@ -145,6 +144,10 @@
   color: #808080;
 }
 
+.ext-key-style .ext-style-value {
+  color: #d4d4d4;
+}
+
 /* Color square preview */
 .ext-color-square {
   display: inline-block;
@@ -153,6 +156,6 @@
   border: 1px solid #666;
   border-radius: 2px;
   vertical-align: middle;
-  margin-right: 4px;
+  margin-left: 4px;
   flex-shrink: 0;
 }

@@ -59,27 +59,47 @@ function clearPinnedTooltips() {
   pinnedTooltips = [];
 }
 
-// Highlight a pinned tooltip
+// Highlight color
+const HIGHLIGHT_COLOR = '#4ade80';
+
+// Highlight both tooltip and element together
+function highlightPair(tooltipEl, element) {
+  if (tooltipEl) {
+    tooltipEl.style.outline = `2px solid ${HIGHLIGHT_COLOR}`;
+    tooltipEl.style.outlineOffset = '2px';
+  }
+  if (element) {
+    element._originalOutline = element.style.outline;
+    element.style.outline = `2px solid ${HIGHLIGHT_COLOR}`;
+  }
+}
+
+// Remove highlight from both
+function unhighlightPair(tooltipEl, element) {
+  if (tooltipEl) {
+    tooltipEl.style.outline = '';
+    tooltipEl.style.outlineOffset = '';
+  }
+  if (element) {
+    element.style.outline = element._originalOutline || '';
+  }
+}
+
+// Legacy functions for compatibility
 function highlightTooltip(tooltipEl) {
-  tooltipEl.style.outline = '2px solid #4A90E2';
-  tooltipEl.style.outlineOffset = '2px';
+  highlightPair(tooltipEl, null);
 }
 
-// Remove highlight from tooltip
 function unhighlightTooltip(tooltipEl) {
-  tooltipEl.style.outline = '';
-  tooltipEl.style.outlineOffset = '';
+  unhighlightPair(tooltipEl, null);
 }
 
-// Highlight the target element of a tooltip
 function highlightTargetElement(element) {
-  element._originalOutline = element.style.outline;
-  element.style.outline = '2px solid #4A90E2';
+  highlightPair(null, element);
 }
 
-// Remove highlight from target element
 function unhighlightTargetElement(element) {
-  element.style.outline = element._originalOutline || '';
+  unhighlightPair(null, element);
 }
 
 // Find tooltip for element
@@ -252,12 +272,12 @@ function pinTooltip(element) {
   document.documentElement.appendChild(pinnedTooltip);
   pinnedTooltips.push(pinnedTooltip);
 
-  // Add hover events to highlight target element
+  // Add hover events to highlight both tooltip and element
   pinnedTooltip.addEventListener('mouseenter', () => {
-    highlightTargetElement(element);
+    highlightPair(pinnedTooltip, element);
   });
   pinnedTooltip.addEventListener('mouseleave', () => {
-    unhighlightTargetElement(element);
+    unhighlightPair(pinnedTooltip, element);
   });
 
   // Add event listeners for pinned tooltip
@@ -382,11 +402,31 @@ function getKeyComputedStyles(element) {
     styles['margin'] = margin;
   }
 
-  // Border (if not zero/none)
-  const border = computed.border;
-  const borderWidth = computed.borderWidth;
-  if (borderWidth && borderWidth !== '0px') {
-    styles['border'] = border || `${borderWidth} ${computed.borderStyle} ${computed.borderColor}`;
+  // Border (if not zero/none) - show individual sides if different
+  const borderTop = computed.borderTop;
+  const borderRight = computed.borderRight;
+  const borderBottom = computed.borderBottom;
+  const borderLeft = computed.borderLeft;
+  const borderTopWidth = computed.borderTopWidth;
+  const borderRightWidth = computed.borderRightWidth;
+  const borderBottomWidth = computed.borderBottomWidth;
+  const borderLeftWidth = computed.borderLeftWidth;
+
+  const hasTopBorder = borderTopWidth && borderTopWidth !== '0px';
+  const hasRightBorder = borderRightWidth && borderRightWidth !== '0px';
+  const hasBottomBorder = borderBottomWidth && borderBottomWidth !== '0px';
+  const hasLeftBorder = borderLeftWidth && borderLeftWidth !== '0px';
+
+  if (hasTopBorder || hasRightBorder || hasBottomBorder || hasLeftBorder) {
+    // Check if all borders are the same
+    if (borderTop === borderRight && borderRight === borderBottom && borderBottom === borderLeft) {
+      styles['border'] = borderTop;
+    } else {
+      if (hasTopBorder) styles['border-top'] = borderTop;
+      if (hasRightBorder) styles['border-right'] = borderRight;
+      if (hasBottomBorder) styles['border-bottom'] = borderBottom;
+      if (hasLeftBorder) styles['border-left'] = borderLeft;
+    }
   }
 
   // Color (as hex)
@@ -411,18 +451,12 @@ function buildTooltipContent(selector, declaredStyles, keyStyles, textContent, i
   const declaredCount = Object.keys(declaredStyles).length;
 
   let html = `<div class="ext-tooltip-header"><span class="ext-tooltip-selector">${escapeHtml(selector)}</span>`;
-
-  if (isPinned) {
-    html += `<button class="ext-tooltip-btn ext-tooltip-close" title="Close">×</button>`;
-  } else {
-    html += `<span class="ext-tooltip-close-placeholder"></span>`;
-  }
-
+  html += `<button class="ext-tooltip-btn ext-tooltip-close${isPinned ? '' : ' ext-tooltip-close-hidden'}" title="Close">×</button>`;
   html += `</div><div class="ext-tooltip-styles">`;
 
   // Show text content as first item in computed group
   if (textContent) {
-    html += `<div class="ext-style-row ext-key-style"><span class="ext-style-prop">text</span>:<span class="ext-style-value">"${escapeHtml(textContent)}";</span></div>`;
+    html += `<div class="ext-style-row ext-key-style"><span class="ext-style-prop">text</span>:<span class="ext-style-value">"${escapeHtml(textContent)}"</span></div>`;
   }
 
   // Always show key computed properties
@@ -452,9 +486,9 @@ function formatKeyStyles(styles) {
   for (const [prop, value] of Object.entries(styles)) {
     // Check if value is a color object with raw color for square
     if (value && typeof value === 'object' && value.raw) {
-      html += `<div class="ext-style-row ext-key-style"><span class="ext-style-prop">${escapeHtml(prop)}</span>:<span class="ext-color-square" style="background:${value.raw}"></span><span class="ext-style-value">${escapeHtml(value.value)};</span></div>`;
+      html += `<div class="ext-style-row ext-key-style"><span class="ext-style-prop">${escapeHtml(prop)}</span>:<span class="ext-color-square" style="background:${value.raw}"></span><span class="ext-style-value">${escapeHtml(value.value)}</span></div>`;
     } else {
-      html += `<div class="ext-style-row ext-key-style"><span class="ext-style-prop">${escapeHtml(prop)}</span>:<span class="ext-style-value">${escapeHtml(value)};</span></div>`;
+      html += `<div class="ext-style-row ext-key-style"><span class="ext-style-prop">${escapeHtml(prop)}</span>:<span class="ext-style-value">${escapeHtml(value)}</span></div>`;
     }
   }
   return html;
@@ -572,8 +606,9 @@ function stopPicker() {
   document.removeEventListener('contextmenu', handleContextMenu, true);
 }
 
-// Track currently highlighted tooltip (for cleanup)
+// Track currently highlighted pair (for cleanup)
 let currentHighlightedTooltip = null;
+let currentHighlightedElement = null;
 
 // Handle mouse move
 function handleMouseMove(e) {
@@ -594,36 +629,34 @@ function handleMouseMove(e) {
     // Hide overlay and tooltip when over our own elements
     if (overlay) overlay.style.display = 'none';
     if (tooltip) tooltip.style.display = 'none';
-    // Clear any highlighted tooltip
-    if (currentHighlightedTooltip) {
-      unhighlightTooltip(currentHighlightedTooltip);
-      currentHighlightedTooltip = null;
-    }
+    // Don't clear highlights here - pinned tooltip's own hover events handle that
     return;
   }
 
   // Check if element already has a tooltip
   const existingTooltip = getTooltipForElement(currentElement);
   if (existingTooltip) {
-    // Hide picker overlay/tooltip and highlight existing tooltip instead
+    // Hide picker overlay/tooltip and highlight both existing tooltip and element
     if (overlay) overlay.style.display = 'none';
     if (tooltip) tooltip.style.display = 'none';
 
-    // Unhighlight previous tooltip if different
+    // Unhighlight previous pair if different
     if (currentHighlightedTooltip && currentHighlightedTooltip !== existingTooltip) {
-      unhighlightTooltip(currentHighlightedTooltip);
+      unhighlightPair(currentHighlightedTooltip, currentHighlightedElement);
     }
 
-    highlightTooltip(existingTooltip);
+    highlightPair(existingTooltip, currentElement);
     currentHighlightedTooltip = existingTooltip;
+    currentHighlightedElement = currentElement;
     e.stopPropagation();
     return;
   }
 
-  // Clear any previously highlighted tooltip
-  if (currentHighlightedTooltip) {
-    unhighlightTooltip(currentHighlightedTooltip);
+  // Clear any previously highlighted pair
+  if (currentHighlightedTooltip || currentHighlightedElement) {
+    unhighlightPair(currentHighlightedTooltip, currentHighlightedElement);
     currentHighlightedTooltip = null;
+    currentHighlightedElement = null;
   }
 
   updateOverlay(currentElement);
