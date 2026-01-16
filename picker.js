@@ -67,25 +67,23 @@ function createPickerLayer() {
   tooltip.className = 'ext-picker-tooltip';
   tooltip.style.position = 'fixed';
 
-  // Create highlight rectangles - high z-index within layer, margin to show border outside element
+  // Create highlight rectangles - use outline so it renders outside the element
   elementHighlight = document.createElement('div');
   elementHighlight.className = 'ext-highlight-rect';
   elementHighlight.style.cssText = `
     position: fixed;
-    border: 2px solid ${HIGHLIGHT_COLOR};
+    outline: 2px solid ${HIGHLIGHT_COLOR};
     pointer-events: none;
     display: none;
-    z-index: 2147483647;
   `;
 
   tooltipHighlight = document.createElement('div');
   tooltipHighlight.className = 'ext-highlight-rect';
   tooltipHighlight.style.cssText = `
     position: fixed;
-    border: 2px solid ${HIGHLIGHT_COLOR};
+    outline: 2px solid ${HIGHLIGHT_COLOR};
     pointer-events: none;
     display: none;
-    z-index: 2147483647;
   `;
 
   // Create SVG for connection lines
@@ -100,13 +98,13 @@ function createPickerLayer() {
     overflow: visible;
   `;
 
-  // Add overlay and tooltip first, highlights last so they render on top
+  // Add highlights first, then overlay and tooltip on top
   pickerLayer.appendChild(linesSvg);
-  pickerLayer.appendChild(overlay);
-  pickerLayer.appendChild(tooltip);
-  // Highlights added last to render on top of everything
   pickerLayer.appendChild(elementHighlight);
   pickerLayer.appendChild(tooltipHighlight);
+  // Overlay and tooltip render on top of highlights
+  pickerLayer.appendChild(overlay);
+  pickerLayer.appendChild(tooltip);
 
   // Create toolbar
   toolbar = document.createElement('div');
@@ -335,6 +333,22 @@ function deactivateExtension() {
   disablePickerMode();
   clearPinnedTooltips();
   removePickerLayer();
+  // Clear all state
+  highlightedElement = null;
+  highlightedTooltip = null;
+  currentHighlightedTooltip = null;
+  currentHighlightedElement = null;
+  // Clean up any in-progress drags
+  if (draggedTooltip) {
+    document.removeEventListener('mousemove', onDrag, true);
+    document.removeEventListener('mouseup', stopDrag, true);
+    draggedTooltip = null;
+  }
+  if (draggingToolbar) {
+    document.removeEventListener('mousemove', onToolbarDrag, true);
+    document.removeEventListener('mouseup', stopToolbarDrag, true);
+    draggingToolbar = false;
+  }
 }
 
 // Enable picker mode (allow picking new elements)
@@ -387,9 +401,7 @@ function clearPinnedTooltips() {
   });
   pinnedTooltips = [];
   unhighlightPair(null, null);
-  if (pinnedTooltips.length === 0) {
-    stopRenderLoop();
-  }
+  stopRenderLoop();
 }
 
 // Update highlight rectangle position
@@ -413,10 +425,6 @@ function highlightPair(tooltipEl, element) {
   // Ensure layer exists
   if (!pickerLayer) createPickerLayer();
 
-  // Move highlights to end of layer so they render on top of tooltips
-  if (elementHighlight) pickerLayer.appendChild(elementHighlight);
-  if (tooltipHighlight) pickerLayer.appendChild(tooltipHighlight);
-
   // Change line to highlight color
   if (tooltipEl._connectionLine) {
     tooltipEl._connectionLine.setAttribute('stroke', HIGHLIGHT_COLOR);
@@ -438,10 +446,21 @@ function unhighlightPair(tooltipEl, element) {
   highlightedTooltip = null;
   hideHighlightRect(elementHighlight);
   hideHighlightRect(tooltipHighlight);
+
+  // Stop render loop if no pinned tooltips need updating
+  if (pinnedTooltips.length === 0) {
+    stopRenderLoop();
+  }
 }
 
 // Render loop - constantly update highlights and tooltip data
 function renderLoop() {
+  // Stop if extension not active or nothing to update
+  if (!extensionActive || (pinnedTooltips.length === 0 && !highlightedElement && !highlightedTooltip)) {
+    stopRenderLoop();
+    return;
+  }
+
   // Update highlight positions
   if (highlightedElement && elementHighlight) {
     updateHighlightRect(elementHighlight, highlightedElement);
@@ -470,13 +489,7 @@ function renderLoop() {
         pinnedTooltip.innerHTML = newContent;
         pinnedTooltip._lastContent = newContent;
         setupPinnedTooltipEvents(pinnedTooltip, element);
-
-        // Restore draggable header
-        const header = pinnedTooltip.querySelector('.ext-tooltip-header');
-        if (header) {
-          header.style.cursor = 'move';
-          header.addEventListener('mousedown', (e) => startDrag(e, pinnedTooltip));
-        }
+        setupTooltipDrag(pinnedTooltip);
       }
 
       // Update connection line
@@ -899,18 +912,22 @@ function pinTooltip(element) {
 
   // Add event listeners for pinned tooltip
   setupPinnedTooltipEvents(pinnedTooltip, element);
-
-  // Make header draggable
-  const header = pinnedTooltip.querySelector('.ext-tooltip-header');
-  if (header) {
-    header.style.cursor = 'move';
-    header.addEventListener('mousedown', (e) => startDrag(e, pinnedTooltip));
-  }
+  setupTooltipDrag(pinnedTooltip);
 
   // Highlight the newly pinned pair
   highlightPair(pinnedTooltip, element);
   currentHighlightedTooltip = pinnedTooltip;
   currentHighlightedElement = element;
+}
+
+// Setup drag on tooltip header (avoids duplicate listeners)
+function setupTooltipDrag(pinnedTooltip) {
+  const header = pinnedTooltip.querySelector('.ext-tooltip-header');
+  if (header && !header._dragSetup) {
+    header.style.cursor = 'move';
+    header._dragSetup = true;
+    header.addEventListener('mousedown', (e) => startDrag(e, pinnedTooltip));
+  }
 }
 
 // Drag functionality
