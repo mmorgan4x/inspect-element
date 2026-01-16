@@ -3,7 +3,7 @@
   position: absolute;
   pointer-events: none;
   background: rgba(74, 144, 226, 0.3);
-  border: 2px solid #4A90E2;
+  border: 2px solid #4a90e2;
   box-sizing: border-box;
 }
 
@@ -44,14 +44,13 @@
 }
 
 .ext-tooltip-selector {
-  color: #4EC9B0;
+  color: #4ec9b0;
   font-weight: bold;
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 
 .ext-tooltip-btn {
   background: #3e3e42;
@@ -110,15 +109,16 @@
   line-height: 1.4;
   word-wrap: break-word;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
 }
 
 .ext-style-prop {
-  color: #9CDCFE;
+  color: #9cdcfe;
+  white-space: nowrap;
 }
 
 .ext-style-value {
-  color: #CE9178;
+  color: #ce9178;
   flex: 1;
   margin-left: 4px;
 }
@@ -129,6 +129,12 @@
   padding: 4px 0;
 }
 
+/* Values with var() that have computed title */
+.ext-style-value[title] {
+  text-decoration: underline dotted;
+  text-decoration-color: #666;
+  cursor: help;
+}
 
 /* Separator between key styles and declared styles */
 .ext-style-separator {
@@ -156,6 +162,7 @@
   vertical-align: middle;
   margin-left: 4px;
   flex-shrink: 0;
+  margin-top: 2px;
 }
 
 /* Toolbar styles */
@@ -200,6 +207,7 @@
   font-size: 11px;
   font-weight: 500;
   color: #e8eaed;
+  margin: 0 24px;
 }
 
 .ext-toolbar-separator {

@@ -566,34 +566,69 @@ function getElementSelector(element) {
   return selector;
 }
 
+// Check if a property is a color property
+function isColorProperty(prop) {
+  return prop.includes('color') ||
+         prop === 'background' ||
+         prop === 'border' ||
+         prop.startsWith('border-') && prop.endsWith('-color') ||
+         prop === 'outline' ||
+         prop === 'text-decoration' ||
+         prop === 'caret' ||
+         prop === 'fill' ||
+         prop === 'stroke';
+}
+
+// Check if a value looks like a color
+function isColorValue(value) {
+  if (!value || typeof value !== 'string') return false;
+  const v = value.trim().toLowerCase();
+  return v.startsWith('#') ||
+         v.startsWith('rgb') ||
+         v.startsWith('hsl') ||
+         v.startsWith('oklch') ||
+         v.startsWith('oklab') ||
+         v.startsWith('lab') ||
+         v.startsWith('lch');
+}
+
 // Get declared values from stylesheets and inline styles
 function getDeclaredStyles(element) {
   const declared = {};
+
+  // Recursively process CSS rules (handles @media, @supports, @layer, etc.)
+  function processRules(rules) {
+    if (!rules) return;
+
+    for (const rule of rules) {
+      try {
+        if (rule.type === CSSRule.STYLE_RULE) {
+          // Regular style rule
+          if (element.matches(rule.selectorText)) {
+            const style = rule.style;
+            for (let i = 0; i < style.length; i++) {
+              const prop = style[i];
+              const value = style.getPropertyValue(prop);
+              const priority = style.getPropertyPriority(prop);
+              // Mark property as declared (value may be empty for shorthand-expanded props)
+              declared[prop] = { value: value, priority: priority };
+            }
+          }
+        } else if (rule.cssRules) {
+          // Grouping rule (@media, @supports, @layer, etc.) - recurse into it
+          processRules(rule.cssRules);
+        }
+      } catch (e) {
+        // Skip invalid selectors or inaccessible rules
+      }
+    }
+  }
 
   // Get styles from matching CSS rules
   try {
     for (const sheet of document.styleSheets) {
       try {
-        const rules = sheet.cssRules || sheet.rules;
-        if (!rules) continue;
-
-        for (const rule of rules) {
-          if (rule.type === CSSRule.STYLE_RULE) {
-            try {
-              if (element.matches(rule.selectorText)) {
-                const style = rule.style;
-                for (let i = 0; i < style.length; i++) {
-                  const prop = style[i];
-                  const value = style.getPropertyValue(prop);
-                  const priority = style.getPropertyPriority(prop);
-                  declared[prop] = priority ? `${value} !important` : value;
-                }
-              }
-            } catch (e) {
-              // Skip invalid selectors
-            }
-          }
-        }
+        processRules(sheet.cssRules || sheet.rules);
       } catch (e) {
         // Skip cross-origin stylesheets
       }
@@ -608,11 +643,188 @@ function getDeclaredStyles(element) {
       const prop = element.style[i];
       const value = element.style.getPropertyValue(prop);
       const priority = element.style.getPropertyPriority(prop);
-      declared[prop] = priority ? `${value} !important` : value;
+      declared[prop] = { value: value, priority: priority };
     }
   }
 
-  return declared;
+  // Filter out initial values and convert colors
+  const computed = window.getComputedStyle(element);
+  const temp = document.createElement('div');
+  temp.style.all = 'initial';
+  document.body.appendChild(temp);
+  const initial = window.getComputedStyle(temp);
+
+  const result = {};
+  for (const [prop, declaredInfo] of Object.entries(declared)) {
+    // Skip if computed value equals initial value
+    const computedValue = computed.getPropertyValue(prop);
+    const initialValue = initial.getPropertyValue(prop);
+    if (computedValue === initialValue) continue;
+
+    // Use declared value if present, otherwise use computed value (for shorthand-expanded props)
+    let displayValue = declaredInfo.value && declaredInfo.value.trim() ? declaredInfo.value : computedValue;
+    if (declaredInfo.priority) {
+      displayValue = `${displayValue} !important`;
+    }
+
+    // Check if value contains var() - show var() but tooltip shows computed
+    const hasVar = displayValue && displayValue.includes('var(');
+
+    // Convert colors to object format with hex
+    if (isColorProperty(prop) || isColorValue(displayValue)) {
+      // Use computed value to get resolved color
+      const rawColor = computedValue;
+      if (rawColor && rawColor !== 'transparent' && rawColor !== 'rgba(0, 0, 0, 0)') {
+        result[prop] = { value: rgbToHex(rawColor), raw: rawColor };
+        if (hasVar) {
+          result[prop].value = displayValue;
+          result[prop].computed = rgbToHex(rawColor);
+        }
+      } else {
+        result[prop] = hasVar ? { value: displayValue, computed: computedValue } : displayValue;
+      }
+    } else {
+      // For non-color properties with var(), convert computed if it looks like a color
+      const computedForTooltip = isColorValue(computedValue) ? rgbToHex(computedValue) : computedValue;
+      result[prop] = hasVar ? { value: displayValue, computed: computedForTooltip } : displayValue;
+    }
+  }
+
+  temp.remove();
+
+  // Collapse longhand properties into shorthands
+  return collapseToShorthands(result);
+}
+
+// Collapse longhand CSS properties into shorthands where possible
+function collapseToShorthands(styles) {
+  const result = { ...styles };
+
+  // Helper to get string value from style (handles color objects)
+  function getVal(prop) {
+    const v = result[prop];
+    if (!v) return null;
+    if (typeof v === 'object' && v.value) return v.value;
+    return v;
+  }
+
+  // Helper to check if all values are equal
+  function allEqual(...vals) {
+    const filtered = vals.filter(v => v != null);
+    if (filtered.length === 0) return false;
+    return filtered.every(v => v === filtered[0]);
+  }
+
+  // Helper to remove props from result
+  function removeProps(...props) {
+    props.forEach(p => delete result[p]);
+  }
+
+  // Collapse margin
+  const mt = getVal('margin-top'), mr = getVal('margin-right'),
+        mb = getVal('margin-bottom'), ml = getVal('margin-left');
+  if (mt && mr && mb && ml) {
+    if (allEqual(mt, mr, mb, ml)) {
+      result['margin'] = mt;
+    } else if (mt === mb && mr === ml) {
+      result['margin'] = `${mt} ${mr}`;
+    } else if (mr === ml) {
+      result['margin'] = `${mt} ${mr} ${mb}`;
+    } else {
+      result['margin'] = `${mt} ${mr} ${mb} ${ml}`;
+    }
+    removeProps('margin-top', 'margin-right', 'margin-bottom', 'margin-left');
+  }
+
+  // Collapse padding
+  const pt = getVal('padding-top'), pr = getVal('padding-right'),
+        pb = getVal('padding-bottom'), pl = getVal('padding-left');
+  if (pt && pr && pb && pl) {
+    if (allEqual(pt, pr, pb, pl)) {
+      result['padding'] = pt;
+    } else if (pt === pb && pr === pl) {
+      result['padding'] = `${pt} ${pr}`;
+    } else if (pr === pl) {
+      result['padding'] = `${pt} ${pr} ${pb}`;
+    } else {
+      result['padding'] = `${pt} ${pr} ${pb} ${pl}`;
+    }
+    removeProps('padding-top', 'padding-right', 'padding-bottom', 'padding-left');
+  }
+
+  // Collapse border (if all sides are the same)
+  const btw = getVal('border-top-width'), bts = getVal('border-top-style'), btc = result['border-top-color'];
+  const brw = getVal('border-right-width'), brs = getVal('border-right-style'), brc = result['border-right-color'];
+  const bbw = getVal('border-bottom-width'), bbs = getVal('border-bottom-style'), bbc = result['border-bottom-color'];
+  const blw = getVal('border-left-width'), bls = getVal('border-left-style'), blc = result['border-left-color'];
+
+  const btcVal = typeof btc === 'object' ? btc.value : btc;
+  const brcVal = typeof brc === 'object' ? brc.value : brc;
+  const bbcVal = typeof bbc === 'object' ? bbc.value : bbc;
+  const blcVal = typeof blc === 'object' ? blc.value : blc;
+
+  if (btw && bts && btcVal &&
+      allEqual(btw, brw, bbw, blw) &&
+      allEqual(bts, brs, bbs, bls) &&
+      allEqual(btcVal, brcVal, bbcVal, blcVal)) {
+    // All borders are the same - collapse to single border
+    if (typeof btc === 'object' && btc.raw) {
+      result['border'] = { prefix: `${btw} ${bts}`, value: btcVal, raw: btc.raw };
+    } else {
+      result['border'] = `${btw} ${bts} ${btcVal}`;
+    }
+    removeProps('border-top-width', 'border-top-style', 'border-top-color',
+                'border-right-width', 'border-right-style', 'border-right-color',
+                'border-bottom-width', 'border-bottom-style', 'border-bottom-color',
+                'border-left-width', 'border-left-style', 'border-left-color');
+  }
+
+  // Collapse border-radius
+  const rtl = getVal('border-top-left-radius'), rtr = getVal('border-top-right-radius'),
+        rbr = getVal('border-bottom-right-radius'), rbl = getVal('border-bottom-left-radius');
+  if (rtl && rtr && rbr && rbl) {
+    if (allEqual(rtl, rtr, rbr, rbl)) {
+      result['border-radius'] = rtl;
+    } else if (rtl === rbr && rtr === rbl) {
+      result['border-radius'] = `${rtl} ${rtr}`;
+    } else if (rtr === rbl) {
+      result['border-radius'] = `${rtl} ${rtr} ${rbr}`;
+    } else {
+      result['border-radius'] = `${rtl} ${rtr} ${rbr} ${rbl}`;
+    }
+    removeProps('border-top-left-radius', 'border-top-right-radius',
+                'border-bottom-right-radius', 'border-bottom-left-radius');
+  }
+
+  // Collapse grid-column (start / end)
+  const gcs = getVal('grid-column-start'), gce = getVal('grid-column-end');
+  if (gcs && gce) {
+    if (gce === 'auto') {
+      result['grid-column'] = gcs;
+    } else {
+      result['grid-column'] = `${gcs} / ${gce}`;
+    }
+    removeProps('grid-column-start', 'grid-column-end');
+  } else if (gcs) {
+    result['grid-column'] = gcs;
+    removeProps('grid-column-start');
+  }
+
+  // Collapse grid-row (start / end)
+  const grs = getVal('grid-row-start'), gre = getVal('grid-row-end');
+  if (grs && gre) {
+    if (gre === 'auto') {
+      result['grid-row'] = grs;
+    } else {
+      result['grid-row'] = `${grs} / ${gre}`;
+    }
+    removeProps('grid-row-start', 'grid-row-end');
+  } else if (grs) {
+    result['grid-row'] = grs;
+    removeProps('grid-row-start');
+  }
+
+  return result;
 }
 
 // Pin tooltip at current position
@@ -817,10 +1029,6 @@ function getKeyComputedStyles(element) {
   }
 
   // Border (if not zero/none) - show individual sides if different
-  const borderTop = computed.borderTop;
-  const borderRight = computed.borderRight;
-  const borderBottom = computed.borderBottom;
-  const borderLeft = computed.borderLeft;
   const borderTopWidth = computed.borderTopWidth;
   const borderRightWidth = computed.borderRightWidth;
   const borderBottomWidth = computed.borderBottomWidth;
@@ -831,15 +1039,40 @@ function getKeyComputedStyles(element) {
   const hasBottomBorder = borderBottomWidth && borderBottomWidth !== '0px';
   const hasLeftBorder = borderLeftWidth && borderLeftWidth !== '0px';
 
+  // Helper to format border with hex color
+  function formatBorder(width, style, color) {
+    const hexColor = rgbToHex(color);
+    return { prefix: `${width} ${style}`, value: hexColor, raw: color };
+  }
+
   if (hasTopBorder || hasRightBorder || hasBottomBorder || hasLeftBorder) {
+    const topStyle = computed.borderTopStyle;
+    const rightStyle = computed.borderRightStyle;
+    const bottomStyle = computed.borderBottomStyle;
+    const leftStyle = computed.borderLeftStyle;
+    const topColor = computed.borderTopColor;
+    const rightColor = computed.borderRightColor;
+    const bottomColor = computed.borderBottomColor;
+    const leftColor = computed.borderLeftColor;
+
     // Check if all borders are the same
-    if (borderTop === borderRight && borderRight === borderBottom && borderBottom === borderLeft) {
-      styles['border'] = borderTop;
+    const allSame = borderTopWidth === borderRightWidth &&
+                    borderRightWidth === borderBottomWidth &&
+                    borderBottomWidth === borderLeftWidth &&
+                    topStyle === rightStyle &&
+                    rightStyle === bottomStyle &&
+                    bottomStyle === leftStyle &&
+                    topColor === rightColor &&
+                    rightColor === bottomColor &&
+                    bottomColor === leftColor;
+
+    if (allSame && hasTopBorder) {
+      styles['border'] = formatBorder(borderTopWidth, topStyle, topColor);
     } else {
-      if (hasTopBorder) styles['border-top'] = borderTop;
-      if (hasRightBorder) styles['border-right'] = borderRight;
-      if (hasBottomBorder) styles['border-bottom'] = borderBottom;
-      if (hasLeftBorder) styles['border-left'] = borderLeft;
+      if (hasTopBorder) styles['border-top'] = formatBorder(borderTopWidth, topStyle, topColor);
+      if (hasRightBorder) styles['border-right'] = formatBorder(borderRightWidth, rightStyle, rightColor);
+      if (hasBottomBorder) styles['border-bottom'] = formatBorder(borderBottomWidth, bottomStyle, bottomColor);
+      if (hasLeftBorder) styles['border-left'] = formatBorder(borderLeftWidth, leftStyle, leftColor);
     }
   }
 
@@ -870,7 +1103,7 @@ function buildTooltipContent(selector, declaredStyles, keyStyles, textContent, i
 
   // Show text content as first item in computed group
   if (textContent) {
-    html += `<div class="ext-style-row ext-key-style"><span class="ext-style-prop">text</span>:<span class="ext-style-value">"${escapeHtml(textContent)}"</span></div>`;
+    html += `<div class="ext-style-row ext-key-style"><span class="ext-style-prop">content</span>:<span class="ext-style-value">"${escapeHtml(textContent)}"</span></div>`;
   }
 
   // Always show key computed properties
@@ -900,7 +1133,13 @@ function formatKeyStyles(styles) {
   for (const [prop, value] of Object.entries(styles)) {
     // Check if value is a color object with raw color for square
     if (value && typeof value === 'object' && value.raw) {
-      html += `<div class="ext-style-row ext-key-style"><span class="ext-style-prop">${escapeHtml(prop)}</span>:<span class="ext-color-square" style="background:${value.raw}"></span><span class="ext-style-value">${escapeHtml(value.value)}</span></div>`;
+      if (value.prefix) {
+        // Border-style value: prefix + color square + hex
+        html += `<div class="ext-style-row ext-key-style"><span class="ext-style-prop">${escapeHtml(prop)}</span>:<span class="ext-style-value">${escapeHtml(value.prefix)} <span class="ext-color-square" style="background:${value.raw}"></span>${escapeHtml(value.value)}</span></div>`;
+      } else {
+        // Simple color value: color square + hex
+        html += `<div class="ext-style-row ext-key-style"><span class="ext-style-prop">${escapeHtml(prop)}</span>:<span class="ext-color-square" style="background:${value.raw}"></span><span class="ext-style-value">${escapeHtml(value.value)}</span></div>`;
+      }
     } else {
       html += `<div class="ext-style-row ext-key-style"><span class="ext-style-prop">${escapeHtml(prop)}</span>:<span class="ext-style-value">${escapeHtml(value)}</span></div>`;
     }
@@ -912,7 +1151,18 @@ function formatKeyStyles(styles) {
 function formatSetStyles(styles) {
   let html = '';
   for (const [prop, value] of Object.entries(styles)) {
-    html += `<div class="ext-style-row"><span class="ext-style-prop">${escapeHtml(prop)}</span>:<span class="ext-style-value">${escapeHtml(value)};</span></div>`;
+    if (value && typeof value === 'object') {
+      const titleAttr = value.computed ? ` title="${escapeHtml(value.computed)}"` : '';
+      if (value.raw) {
+        // Color value with square
+        html += `<div class="ext-style-row"><span class="ext-style-prop">${escapeHtml(prop)}</span>:<span class="ext-color-square" style="background:${value.raw}"></span><span class="ext-style-value"${titleAttr}>${escapeHtml(value.value)};</span></div>`;
+      } else {
+        // Value with var() - show computed in title
+        html += `<div class="ext-style-row"><span class="ext-style-prop">${escapeHtml(prop)}</span>:<span class="ext-style-value"${titleAttr}>${escapeHtml(value.value)};</span></div>`;
+      }
+    } else {
+      html += `<div class="ext-style-row"><span class="ext-style-prop">${escapeHtml(prop)}</span>:<span class="ext-style-value">${escapeHtml(value)};</span></div>`;
+    }
   }
   return html;
 }
@@ -991,6 +1241,26 @@ function stopPicker() {
 let currentHighlightedTooltip = null;
 let currentHighlightedElement = null;
 
+// Check if element is part of picker UI (works with SVG elements too)
+function isPickerUIElement(el) {
+  let node = el;
+  while (node && node !== document.documentElement) {
+    if (node === pickerLayer || node === overlay || node === tooltip || node === toolbar) {
+      return true;
+    }
+    if (node.id === 'ext-picker-layer') {
+      return true;
+    }
+    if (node.classList && (
+        node.classList.contains('ext-picker-tooltip') ||
+        node.classList.contains('ext-picker-toolbar'))) {
+      return true;
+    }
+    node = node.parentNode || node.parentElement;
+  }
+  return false;
+}
+
 // Handle mouse move
 function handleMouseMove(e) {
   if (!pickerActive) return;
@@ -1001,21 +1271,7 @@ function handleMouseMove(e) {
   currentElement = e.target;
 
   // Don't highlight our own overlay/tooltip/toolbar or any pinned tooltips
-  if (currentElement === overlay ||
-      currentElement === tooltip ||
-      currentElement === toolbar ||
-      currentElement === pickerLayer ||
-      overlay?.contains(currentElement) ||
-      tooltip?.contains(currentElement) ||
-      toolbar?.contains(currentElement) ||
-      currentElement.classList?.contains('ext-picker-tooltip') ||
-      currentElement.classList?.contains('ext-picker-toolbar') ||
-      currentElement.classList?.contains('ext-tooltip-header') ||
-      currentElement.classList?.contains('ext-tooltip-search') ||
-      currentElement.classList?.contains('ext-tooltip-styles') ||
-      currentElement.closest('.ext-picker-tooltip') ||
-      currentElement.closest('.ext-picker-toolbar') ||
-      currentElement.closest('#ext-picker-layer')) {
+  if (isPickerUIElement(currentElement)) {
     // Hide overlay and tooltip when over our own elements
     if (overlay) overlay.style.display = 'none';
     if (tooltip) tooltip.style.display = 'none';
@@ -1058,18 +1314,7 @@ function handleClick(e) {
   if (!pickerActive) return;
 
   // Don't process clicks on our own elements
-  if (e.target === overlay ||
-      e.target === tooltip ||
-      e.target === toolbar ||
-      e.target === pickerLayer ||
-      e.target.classList?.contains('ext-picker-tooltip') ||
-      e.target.classList?.contains('ext-picker-toolbar') ||
-      e.target.classList?.contains('ext-tooltip-header') ||
-      e.target.classList?.contains('ext-tooltip-search') ||
-      e.target.classList?.contains('ext-tooltip-styles') ||
-      e.target.closest('.ext-picker-tooltip') ||
-      e.target.closest('.ext-picker-toolbar') ||
-      e.target.closest('#ext-picker-layer')) {
+  if (isPickerUIElement(e.target)) {
     return;
   }
 
